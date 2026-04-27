@@ -1,0 +1,8 @@
+nba_api
+pandas
+streamlit
+google-genai
+python-dotenv
+ollama
+plotly
+numpy

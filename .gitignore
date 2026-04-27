@@ -1,0 +1,20 @@
+# --- Secrets & Config ---
+.env
+
+# --- Python Virtual Environment ---
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+
+# --- Generated Data & Results ---
+# We ignore these because they are recreated every time you run the pipeline.
+# Keeping them out of Git prevents "merge conflicts" in your JSON data.
+multi_model_results.json
+final_comparison_report.json
+eval_results.json
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
