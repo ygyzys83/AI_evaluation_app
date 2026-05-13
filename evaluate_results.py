@@ -1,9 +1,66 @@
 import json
 import ollama
-import os
+from models import JudgeVerdict
+from pydantic import ValidationError
 
-# CONFIGURATION: We'll use a reliable local model as our "Golden Judge"
+# ── CONFIGURATION ─────────────────────────────────────────────────────────────
 JUDGE_MODEL = "gpt-oss:20b"
+
+JUDGE_SYSTEM_PROMPT = """You are an expert NBA stats auditor.
+You will be given a question, a ground truth answer, and an AI's answer.
+You must return a JSON object with exactly these fields:
+- verdict: "PASS" or "FAIL" only
+- similarity_score: integer from 1 to 5
+- reasoning: one sentence explaining your verdict
+
+GRADING RULES:
+- PASS only if the AI's answer contains the correct facts from the ground truth
+- If the question is subjective or out-of-scope, PASS if the AI correctly 
+  refused to answer
+- similarity_score 5 = identical meaning, 1 = completely wrong or unrelated
+"""
+
+
+def grade_entry(entry: dict) -> dict | None:
+    """
+    Grade a single eval entry using the judge model.
+    Returns the entry with grade fields added, or None on unrecoverable failure.
+    """
+    judge_prompt = f"""
+QUESTION: {entry['question']}
+GROUND TRUTH: {entry['ground_truth']}
+AI'S ANSWER: {entry['llm_answer']}
+"""
+
+    try:
+        response = ollama.generate(
+            model=JUDGE_MODEL,
+            prompt=judge_prompt,
+            system=JUDGE_SYSTEM_PROMPT,
+            format=JudgeVerdict.model_json_schema(),  # forces JSON matching our schema
+            options={"temperature": 0.0},
+        )
+
+        raw_json = response["response"]
+
+        # Pydantic validates the structure — raises ValidationError if malformed
+        verdict = JudgeVerdict.model_validate_json(raw_json)
+
+        entry["grade"] = verdict.verdict
+        entry["similarity_score"] = verdict.similarity_score
+        entry["reasoning"] = verdict.reasoning
+        return entry
+
+    except ValidationError as e:
+        print(f"  ⚠️  Validation failed for Q{entry['id']}: {e.error_count()} error(s)")
+        entry["grade"] = "ERROR"
+        entry["similarity_score"] = 0
+        entry["reasoning"] = f"Validation error: {str(e)}"
+        return entry
+
+    except Exception as e:
+        print(f"  ❌ Unexpected error for Q{entry['id']}: {e}")
+        return None
 
 
 def grade_all_models():
@@ -11,60 +68,33 @@ def grade_all_models():
         with open("multi_model_results.json", "r") as f:
             results = json.load(f)
     except FileNotFoundError:
-        print("❌ Error: multi_model_results.json not found. Run run_evals.py first.")
+        print("❌ multi_model_results.json not found. Run run_evals.py first.")
         return
 
-    final_graded_data = []
+    print(f"⚖️  Grading with {JUDGE_MODEL} — structured output mode\n")
 
-    print(f"⚖️ Starting Multi-Model Grading using {JUDGE_MODEL} as the Judge...")
+    final_graded_data = []
+    errors = 0
 
     for entry in results:
-        # Construct the Judge Prompt
-        # We ask for TWO things: a Pass/Fail and a Similarity Score (1-5)
-        judge_prompt = f"""
-        You are an expert NBA stats auditor. Compare the AI's answer against the Ground Truth.
+        graded = grade_entry(entry)
+        if graded:
+            final_graded_data.append(graded)
+            icon = "✅" if graded["grade"] == "PASS" else (
+                   "⚠️ " if graded["grade"] == "ERROR" else "❌")
+            print(
+                f"{icon} {graded['model_used']} Q{graded['id']}: "
+                f"{graded['grade']} (Sim: {graded['similarity_score']}) "
+                f"— {graded['reasoning']}"
+            )
+        else:
+            errors += 1
 
-        QUESTION: {entry['question']}
-        GROUND TRUTH: {entry['ground_truth']}
-        AI'S ANSWER: {entry['llm_answer']}
-
-        RULES:
-        1. Accuracy: Does the AI provide the correct numbers/teams? (PASS/FAIL)
-        2. Similarity: On a scale of 1-5, how semantically similar is the AI answer to the Truth?
-
-        Return your response in this EXACT format:
-        Verdict: [PASS or FAIL]
-        Similarity: [1-5]
-        """
-
-        try:
-            response = ollama.generate(model=JUDGE_MODEL, prompt=judge_prompt)
-            output = response['response'].upper()
-
-            # Simple parsing of the Judge's output
-            grade = "PASS" if "VERDICT: PASS" in output else "FAIL"
-
-            # Extract similarity score (default to 1 if parsing fails)
-            similarity = 1
-            for s in ["1", "2", "3", "4", "5"]:
-                if f"SIMILARITY: {s}" in output:
-                    similarity = int(s)
-
-            # Update the entry with our new metrics
-            entry['grade'] = grade
-            entry['similarity_score'] = similarity
-
-            final_graded_data.append(entry)
-            print(f"Graded: {entry['model_used']} - Q{entry['id']}: {grade} (Sim: {similarity})")
-
-        except Exception as e:
-            print(f"❌ Error grading {entry['id']}: {e}")
-
-    # Save the final consolidated report
     with open("final_comparison_report.json", "w") as f:
         json.dump(final_graded_data, f, indent=4)
 
-    print("\n✅ All models graded! Final report saved to final_comparison_report.json")
+    print(f"\n✅ Done. {len(final_graded_data)} entries graded, {errors} dropped.")
+    print("   Saved to final_comparison_report.json")
 
 
 if __name__ == "__main__":

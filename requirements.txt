@@ -6,3 +6,4 @@ python-dotenv
 ollama
 plotly
 numpy
+pydantic>=2.0

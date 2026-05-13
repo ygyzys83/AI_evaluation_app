@@ -43,7 +43,7 @@ df['cost_sim'] = df['model_used'].map(cost_map)
 
 # Aggregate Stats
 model_stats = df.groupby('model_used').agg({
-    'grade': lambda x: (x == 'PASS').mean() * 100,
+    'grade': lambda x: (x == 'PASS').sum() / max((x != 'ERROR').sum(), 1) * 100,
     'similarity_score': 'mean',
     'latency': 'mean',
     'char_count': 'mean',
@@ -116,5 +116,5 @@ with t2:
 # --- 4. RAW DATA EXPLORER ---
 with st.expander("🔍 View Direct Side-by-Side Comparison"):
     q_id = st.selectbox("Filter by Question ID", options=sorted(df['id'].unique()))
-    comparison = df[df['id'] == q_id][['model_used', 'llm_answer', 'grade', 'similarity_score']]
+    comparison = df[df['id'] == q_id][['model_used', 'llm_answer', 'grade', 'similarity_score', 'reasoning']]
     st.table(comparison)
